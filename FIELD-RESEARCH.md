@@ -1,0 +1,29 @@
+# 平台字段取舍与源码依据
+
+2026-11-02，基于此前已克隆的 GitHub 源码版本逐项检查。此次 GitHub 网页抓取失败，下面链接固定到本地核对的提交，不表示仓库当前最新版本。只参考字段和交互，不复制这些项目的实现代码。
+
+| 项目 | 核对位置与实际字段 | 本工具采用方式 |
+| --- | --- | --- |
+| Google_Manager | [Account 模型](https://github.com/yynxxxxx/Google_Manager/blob/8bbf23a5ce000bec107786c1c20a1d8b1ed189ba/app/models/account.py)：邮箱、密码、恢复邮箱、TOTP 密钥、备注、账号状态、出售状态、创建/更新时间 | 复用现有邮箱、密码、恢复邮箱、TOTP、备注；不引入出售状态 |
+| account-manager | [accounts.js](https://github.com/mxysw/account-manager/blob/a6091c9e85138b55723152a5a82adb83945541c2/src/accounts.js)：可编辑邮箱、密码、TOTP、新旧密钥、恢复邮箱、年份、国家、语言、设备、备注、来源，另有大量自动检测状态 | 地区、设备已有；年份、语言作为可选模板字段；不引入自动检测和销售流程 |
+| appleid_auto | [账号表单](https://github.com/pplulee/appleid_auto/blob/bed499a6f0a21c10ee46fb7993a00a000cd3c54a/view/admin/accountDetail.html)：账号、密码、备注、生日、三组密保问题/答案，另有检测和改密开关 | 生日、三组密保问答可按需加入 Apple 模板；答案默认敏感，不强制所有 Apple 账号填写 |
+| icloudManager | [录入组件](https://github.com/ChouHX/icloudManager/blob/4630dbafb72c25bb241779066215b2f5a5c8682b/web/src/components/AccountModals.tsx)、[数据模板](https://github.com/ChouHX/icloudManager/blob/4630dbafb72c25bb241779066215b2f5a5c8682b/accounts.json.template)：名称、iCloud 邮箱、区域；数据还含真实邮箱、应用专用密码、Cookie 等 | iCloud 邮箱作为可选字段；联系邮箱、地区、应用专用密码复用现有字段；不增加 Cookie 登录流程 |
+| KeePassXC | [基本字段界面](https://github.com/keepassxreboot/keepassxc/blob/f218280c07eb25d5a3b7d3419b846d0ed4de472d/src/gui/entry/EditEntryWidgetMain.ui)、高级字段界面：标题、用户名、密码、URL、备注、标签及高级属性 | 采用“固定核心字段 + 自定义属性”的思路；模板字段支持敏感标记 |
+| Vaultwarden | [Cipher 模型](https://github.com/dani-garcia/vaultwarden/blob/6ed6921cc2b0e03b4d74189574d2a5e71c512e97/src/db/models/cipher.rs) 中存在登录类条目及 fields；该仓库主要为服务端，不能把它当成录入表单源码 | 仅用来佐证通用条目与扩展字段的结构，不据此声称核对了 Bitwarden 客户端表单 |
+
+用户指定的“个人资料、两步验证手机号、通行密钥、Google 提示”作为补充需求加入。身份验证器复用已有 TOTP 密钥，不另建重复字段。通行密钥字段记录设备/保管位置，不实现私钥导入或登录；Google 提示记录启用情况及接收设备，不伪造推送验证码。
+
+## 字段配置规则
+
+- 每个平台可选择默认显示的内置字段；账号标识、显示名称、分组、标签、状态固定保留。
+- 已有非空字段始终可见；隐藏模板字段不会删除资料。
+- 自定义模板支持名称、敏感标记、默认启用、排序和删除。模板调整只影响以后添加的记录，不批量改名或修改已有账号值。
+- Google 可按需添加姓名、生日、恢复手机号、注册年份、语言、备用登录邮箱；Apple 可按需添加姓名、生日、iCloud 邮箱、密保问答。
+- 新增账号及批量导入的新记录会自动带上启用的自定义字段。批量导入映射和 CSV 模板现已跟随平台启用的全部内置与自定义字段。
+- 模板和平台资料随整个资料库加密保存并进入备份；旧版备份仍可打开。
+
+## 用户截图补充的个人信息与 Apple 安全字段
+
+个人信息新增独立的姓名、性别、生日、语言、住址、工作地址、国家或地区。截图中的邮箱、电话复用既有字段，并支持多行。Apple 的个人国家/地区与已有商店地区分别记录；旧个人资料和同名自定义字段保留，不自动解析截图中的真实内容或搬移历史值。
+
+Apple 登录与安全复用密码、受信任电话/设备、双重认证方式、恢复密钥、应用专用密码；新增登录电话号码、密码上次更新日期、账户恢复状态与联系人、遗产联系人、通过 Apple 登录的 App/网站。可按需启用遗产联系人访问密钥（敏感）。这些是用户手动记录的资料，不自动读取 Apple 服务端状态。
