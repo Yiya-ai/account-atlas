@@ -7,7 +7,7 @@ from datetime import datetime
 import xlsxwriter
 
 from .importing import ENUMS
-from .vault import FIELD_LABELS, TEXT_FIELDS, SECRET_FIELDS, MAX_ACCOUNTS, Problem, dumps
+from .vault import FIELD_LABELS, TEXT_FIELDS, SECRET_FIELDS, MAX_ACCOUNTS, Problem, dumps, APPLE_FIELD_LABELS
 
 LABELS = {"platformName":"平台", "identifier":"账号标识", "title":"显示名称", "group":"分组", "tags":"标签", "status":"状态", **FIELD_LABELS, "id":"记录 ID", "favorite":"收藏", "archived":"已归档", "deletedAt":"删除时间", "createdAt":"创建时间", "updatedAt":"更新时间"}
 DEFAULTS = {"platformName", "identifier", "title", "email", "phone", "group", "tags", "status"}
@@ -32,8 +32,11 @@ def preview(vault, payload):
                    (payload.get("includeArchived", True) or not a["archived"])]
         entries.sort(key=lambda a:a["updatedAt"],reverse=True)
     else: raise Problem("请选择有效的导出范围。")
-    fields = [{"key":k, "label":v, "secret":k in SECRET_FIELDS, "default":k in DEFAULTS, "group":"敏感资料" if k in SECRET_FIELDS else "基础与个人资料"} for k,v in LABELS.items()]
     platforms = {p["id"]:p for p in vault.data["platforms"]}
+    templates = {platforms[a["platformId"]]["template"] for a in entries}
+    if scope == "platform": templates = {platforms[payload["platformId"]]["template"]}
+    labels = {**LABELS, **APPLE_FIELD_LABELS} if templates == {"apple"} else LABELS
+    fields = [{"key":k, "label":v, "secret":k in SECRET_FIELDS, "default":k in DEFAULTS, "group":"敏感资料" if k in SECRET_FIELDS else "基础与个人资料"} for k,v in labels.items()]
     custom = {}
     for a in entries:
         p = platforms[a["platformId"]]

@@ -23,11 +23,15 @@ SECRET_FIELDS = ("password", "totp", "recoveryCodes", "appPassword", "recoveryKe
 TEXT_FIELDS = ("title", "identifier", "email", "phone", "region", "group", "notes", "recoveryEmail", "trustedDevices", "loginMethod", "linkedAccount", "verification", "personalProfile", "twoStepPhone", "passkeys", "googlePrompt")
 FIELD_LABELS = {"email": "联系邮箱", "phone": "绑定手机号 / 受信任电话", "region": "地区", "recoveryEmail": "恢复邮箱", "trustedDevices": "受信任设备", "loginMethod": "登录方式", "linkedAccount": "关联账号", "verification": "两步验证方式", "personalProfile": "个人资料", "twoStepPhone": "两步验证手机号", "passkeys": "通行密钥备注", "googlePrompt": "Google 提示", "password": "登录密码", "totp": "身份验证器（TOTP 密钥）", "recoveryCodes": "恢复码 / 备用码", "appPassword": "应用专用密码", "recoveryKey": "恢复密钥", "notes": "备注"}
 PROFILE_FIELDS = {"fullName": "姓名", "gender": "性别", "birthday": "生日", "language": "语言", "homeAddress": "住址", "workAddress": "工作地址", "country": "国家或地区", "loginPhones": "登录电话号码", "passwordUpdatedAt": "密码上次更新日期", "recoveryStatus": "账户恢复状态", "recoveryContacts": "账户恢复联系人", "legacyContacts": "遗产联系人", "appleSignInApps": "通过 Apple 登录的 App / 网站"}
+APPLE_EXTRA_FIELDS = {"securityKeys": "实体安全密钥", "paymentMethods": "付款方式备注", "shippingAddress": "配送地址", "subscriptions": "订阅备注", "familySharing": "家人共享", "devices": "关联设备", "hideMyEmail": "隐藏邮件地址", "icloudAnalytics": "iCloud 分析", "appleMessages": "来自 Apple 的信息"}
+PROFILE_FIELDS.update(APPLE_EXTRA_FIELDS)
 TEXT_FIELDS += tuple(PROFILE_FIELDS)
 FIELD_LABELS.update(PROFILE_FIELDS, legacyAccessKey="遗产联系人访问密钥")
+APPLE_FIELD_LABELS = {"identifier": "Apple 账户（主要邮箱或电话号码）", "email": "其他电子邮件地址", "phone": "受信任电话号码", "region": "商店地区", "birthday": "出生日期", "verification": "双重认证", "appPassword": "App 专用密码"}
+APPLE_FIELDS = {"email", "phone", "region", "trustedDevices", "verification", "password", "appPassword", "recoveryKey", "legacyAccessKey", "notes", "fullName", "birthday", "language", "country", "gender", "loginPhones", "passwordUpdatedAt", "recoveryStatus", "recoveryContacts", "legacyContacts", "appleSignInApps", *APPLE_EXTRA_FIELDS}
 PROFILE_DEFAULTS = {
     "google": ["fullName", "gender", "birthday", "language", "homeAddress", "workAddress"],
-    "apple": ["fullName", "birthday", "language", "country", "loginPhones", "passwordUpdatedAt", "recoveryStatus", "recoveryContacts", "legacyContacts", "appleSignInApps"],
+    "apple": ["fullName", "birthday", "language", "country", "loginPhones", "passwordUpdatedAt"],
     "custom": [],
 }
 PROFILE_ALIASES = {"fullName": {"姓名"}, "birthday": {"生日", "出生日期"}, "country": {"国家或地区", "国家/地区"}, **{k: {v} for k, v in PROFILE_FIELDS.items() if k not in ("fullName", "birthday", "country")}}
@@ -39,13 +43,20 @@ def platform_config(p):
     if p["template"] == "google": excluded = {"trustedDevices", "recoveryKey"}
     if p["template"] == "apple": excluded = {"googlePrompt", "twoStepPhone", "totp"}
     excluded |= set(PROFILE_FIELDS) | {"legacyAccessKey"}
-    out.setdefault("fields", [key for key in FIELD_LABELS if key not in excluded])
+    legacy_names = {f["name"].casefold() for f in out.get("fieldTemplates", [])}
+    defaults = ["email", "phone", "verification", "password", "appPassword", "securityKeys", "notes"] if p["template"] == "apple" else [key for key in FIELD_LABELS if key not in excluded]
+    defaults = [key for key in defaults if not legacy_names.intersection(PROFILE_ALIASES.get(key, set()))]
+    out.setdefault("fields", defaults)
     out.setdefault("fieldTemplates", [])
     if out.get("fieldVersion", 1) < 2:
-        legacy_names = {f["name"].casefold() for f in out["fieldTemplates"]}
         for key in PROFILE_DEFAULTS[p["template"]]:
             if key not in out["fields"] and not legacy_names.intersection(PROFILE_ALIASES[key]): out["fields"].append(key)
     out["fieldVersion"] = 2
+    # Presentation policy only: account values and custom templates remain intact.
+    out["availableFields"] = [key for key in FIELD_LABELS if p["template"] != "apple" or key in APPLE_FIELDS]
+    out["fieldLabels"] = APPLE_FIELD_LABELS.copy() if p["template"] == "apple" else {}
+    if p["template"] == "apple":
+        out["fields"] = [key for key in out["fields"] if key in APPLE_FIELDS]
     return out
 
 

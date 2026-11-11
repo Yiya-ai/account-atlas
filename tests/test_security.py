@@ -24,6 +24,7 @@ def test_mfa_requires_second_factor_and_rotates_cookie(c, app):
     account = add(c)
     original = c.get_cookie('atlas_session').value
     secret, codes = enable(c)
+    used_code = pyotp.TOTP(secret).at(app.extensions['vault'].data['security']['lastStep'] * 30)
     assert c.get_cookie('atlas_session').value != original
     raw = app.extensions['vault'].path.read_bytes()
     assert secret.encode() not in raw and codes[0].encode() not in raw
@@ -39,8 +40,8 @@ def test_mfa_requires_second_factor_and_rotates_cookie(c, app):
     for method, path in [('get','/state'),('get','/security'),('get',f'/accounts/{account["id"]}'),('post','/backup'),('post','/export/download'),('post','/import/apply'),('post','/password'),('post','/restore/apply'),('post','/security/disable')]:
         assert getattr(c, method)('/api'+path, headers=H, **({'json':{}} if method=='post' else {})).status_code == 401
     assert c.get('/api/status').json['unlocked'] is False
-    # Enrollment code is already used, even though it is still current.
-    assert post(c, '/unlock/verify', {'code':pyotp.TOTP(secret).now()}).status_code == 400
+    # Replay the code actually consumed at enrollment, even if the wall clock rolled over.
+    assert post(c, '/unlock/verify', {'code':used_code}).status_code == 400
     assert post(c, '/unlock/verify', {'code':codes[0]}).status_code == 200
     assert c.get('/api/state').status_code == 200
     assert not c.get_cookie('atlas_challenge', path='/api/unlock')

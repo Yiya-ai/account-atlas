@@ -1,0 +1,3 @@
+# Optional offline city gate for explicitly configured HTTPS deployments.
+-r requirements.txt
+py-ip2region==3.0.6

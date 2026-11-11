@@ -290,7 +290,8 @@ def csv_text(rows):
 
 def test_platform_template_roundtrip_all_fields_and_long_mapping(c):
     custom = [{'name':f'Field {i}', 'secret':i == 0, 'enabled':True} for i in range(25)]
-    assert platform_edit(c, 'apple', fieldTemplates=custom).status_code == 200
+    apple = next(p for p in c.get('/api/state').json['platforms'] if p['id'] == 'apple')
+    assert platform_edit(c, 'apple', fields=apple['fields'] + ['recoveryContacts', 'legacyContacts', 'appleSignInApps'], fieldTemplates=custom).status_code == 200
     template = post(c, '/import/template', {'platformId':'apple'}).json
     assert template['csv'].startswith('\ufeff') and template['filename'].endswith('.csv')
     columns = next(csv.reader(io.StringIO(template['csv'].removeprefix('\ufeff'))))
@@ -376,6 +377,85 @@ def test_legacy_chinese_profile_templates_and_backup_survive(c, app):
     assert platform_edit(c,'google').status_code==200
     backup=post(c,'/backup',{'password':BACKUP}).json
     assert post(c,'/restore/preview',{'backup':backup,'password':BACKUP}).status_code==200
+
+
+def test_apple_template_fields_and_existing_data_survive(c, app):
+    state = c.get('/api/state').json
+    apple = next(p for p in state['platforms'] if p['id'] == 'apple')
+    excluded = {'totp', 'googlePrompt', 'recoveryCodes', 'loginMethod', 'linkedAccount', 'passkeys', 'homeAddress', 'workAddress'}
+    assert excluded.isdisjoint(apple['fields'])
+    assert excluded.isdisjoint(apple['availableFields'])
+    assert {'phone', 'email', 'loginPhones', 'securityKeys', 'verification', 'birthday'} <= set(apple['fields'])
+    assert {'shippingAddress', 'paymentMethods', 'familySharing', 'hideMyEmail', 'gender', 'devices', 'icloudAnalytics'} <= set(apple['availableFields'])
+    assert 'shippingAddress' not in apple['fields']
+    assert apple['fieldLabels']['phone'] == '受信任电话号码'
+    assert apple['fieldLabels']['email'] == '其他电子邮件地址'
+    # Historical unsupported fields remain encrypted and editable after saving the template.
+    a = add(c, platformId='apple', identifier='apple-fixture@example.invalid', googlePrompt='LEGACY_PROMPT',
+            recoveryEmail='legacy@example.invalid', securityKeys='Synthetic key in safe',
+            shippingAddress='SYNTHETIC_ADDRESS', gender='未选定', icloudAnalytics='关闭',
+            loginPhones='+0000000000', phone='+0000000001', verification='totp')
+    assert platform_edit(c, 'apple', fields=apple['fields'] + ['shippingAddress', 'icloudAnalytics']).status_code == 200
+    detail = c.get('/api/accounts/' + a['id']).json
+    secret = post(c, '/accounts/' + a['id'] + '/reveal', {}).json
+    update = {**detail, **secret, 'revision':c.get('/api/state').json['revision'], 'title':'Updated synthetic Apple'}
+    assert c.put('/api/accounts/' + a['id'], json=update, headers=H).status_code == 200
+    for key in ['googlePrompt', 'recoveryEmail', 'securityKeys', 'shippingAddress', 'gender', 'icloudAnalytics', 'loginPhones', 'phone', 'verification']:
+        assert c.get('/api/accounts/' + a['id']).json[key] == detail[key]
+    assert post(c, '/accounts/' + a['id'] + '/reveal', {}).json['secrets'] == secret['secrets']
+    backup = post(c, '/backup', {'password':BACKUP}).json
+    assert post(c, '/lock', {}).status_code == 200
+    assert post(c, '/unlock', {'password':MASTER}).status_code == 200
+    assert post(c, '/restore/preview', {'backup':backup, 'password':BACKUP}).status_code == 200
+    assert b'SYNTHETIC_ADDRESS' not in app.extensions['vault'].path.read_bytes()
+
+
+def test_apple_optional_fields_import_export_round_trip(c):
+    assert platform_edit(c, 'apple', fields=['email', 'phone', 'securityKeys', 'shippingAddress', 'icloudAnalytics']).status_code == 200
+    template = post(c, '/import/template', {'platformId':'apple'}).json
+    keys = {f['key']: f['label'] for f in template['fields']}
+    assert keys['email'] == '其他电子邮件地址'
+    assert keys['identifier'] == 'Apple 账户（主要邮箱或电话号码）'
+    raw = 'apple-fixture@example.invalid,alias@example.invalid,+0000000001,Synthetic hardware key,SYNTHETIC_ADDRESS,关闭'
+    plan = post(c, '/import/preview', {'platformId':'apple', 'text':raw, 'header':False,
+        'mapping':{'identifier':0, 'email':1, 'phone':2, 'securityKeys':3, 'shippingAddress':4, 'icloudAnalytics':5}})
+    assert plan.status_code == 200, plan.json
+    assert post(c, '/import/apply', {'token':plan.json['token']}).status_code == 200
+    a = c.get('/api/state').json['accounts'][0]
+    assert c.get('/api/accounts/' + a['id']).json['securityKeys'] == 'Synthetic hardware key'
+    export = export_plan(c, scope='platform', platformId='apple')
+    rows = csv_rows(post(c, '/export/download', {'token':export['token'], 'fields':['identifier','email','phone','securityKeys','shippingAddress','icloudAnalytics'], 'format':'csv', 'csvExact':True}))
+    assert rows[1] == raw.split(',')
+
+
+def test_legacy_security_key_template_can_still_be_saved(c, app):
+    data = copy.deepcopy(app.extensions['vault'].data)
+    apple = next(p for p in data['platforms'] if p['id'] == 'apple')
+    apple['fieldTemplates'] = [{'name':'实体安全密钥', 'secret':True, 'enabled':True}]
+    app.extensions['vault'].commit(data)
+    config = next(p for p in c.get('/api/state').json['platforms'] if p['id'] == 'apple')
+    assert 'securityKeys' not in config['fields']
+    assert platform_edit(c, 'apple').status_code == 200
+    assert any(f['key'] == 'custom:实体安全密钥' and f['secret'] for f in config['importFields'])
+    assert post(c, '/lock', {}).status_code == 200
+    assert post(c, '/unlock', {'password':MASTER}).status_code == 200
+
+
+def test_import_fill_updates_unrecorded_verification_only(c):
+    a = add(c, platformId='apple', verification='none')
+    for requested, expected in [('twofactor', 'twofactor'), ('disabled', 'twofactor')]:
+        plan = post(c, '/import/preview', {'platformId':'apple', 'text':'owner@example.invalid,' + requested,
+            'mapping':{'identifier':0, 'verification':1}, 'mode':'fill'})
+        assert plan.status_code == 200
+        assert post(c, '/import/apply', {'token':plan.json['token']}).status_code == 200
+        assert c.get('/api/accounts/' + a['id']).json['verification'] == expected
+
+
+def test_import_warns_about_unmapped_optional_columns(c):
+    result = post(c, '/import/analyze', {'platformId':'apple', 'text':'账号标识,配送地址\napple-fixture@example.invalid,SYNTHETIC_ADDRESS', 'header':True}).json
+    assert result['mapping'] == {'identifier':0}
+    assert any('未自动匹配' in warning for warning in result['warnings'])
+    assert 'SYNTHETIC_ADDRESS' not in json.dumps(result['warnings'])
 
 
 def export_plan(c, **payload):

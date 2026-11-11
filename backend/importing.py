@@ -20,9 +20,9 @@ def schema(vault, platform_id):
     p = next((p for p in vault.data["platforms"] if p["id"] == platform_id), None)
     if not p: raise Problem("请选择有效的平台。")
     p = platform_config(p)
-    fields = [{"key": k, "label": v, "secret": False} for k, v in CORE.items()]
+    fields = [{"key": k, "label": p["fieldLabels"].get(k, v), "secret": False} for k, v in CORE.items()]
     for key in p["fields"]:
-        label = FIELD_LABELS[key]
+        label = p["fieldLabels"].get(key, FIELD_LABELS[key])
         if key == "linkedAccount": label = "关联账号 ID（已存在）"
         if key == "region" and p["template"] == "apple": label = "商店地区"
         fields.append({"key": key, "label": label, "secret": key in SECRET_FIELDS})
@@ -56,11 +56,19 @@ def analyze(vault, payload):
     mapping = {}
     warnings = []
     for f in fields:
-        aliases = {header_key(v) for v in [f["key"], f["label"], *ALIASES.get(f["key"], [])]}
+        # Keep accepting pre-adaptation CSV headings as well as Apple-specific labels.
+        names = [f["key"], f["label"], *ALIASES.get(f["key"], [])]
+        for catalog in (FIELD_LABELS, CORE):
+            if f["key"] in catalog: names.append(catalog[f["key"]])
+        aliases = {header_key(v) for v in names}
         if f.get("name"): aliases.add(header_key(f["name"]))
         matches = [i for i, name in enumerate(headers) if header_key(name) in aliases]
         if len(matches) == 1: mapping[f["key"]] = matches[0]
         elif len(matches) > 1: warnings.append(f'{f["label"]}匹配到多个表头，请手动选择。')
+    if headers:
+        unmatched = count - len(set(mapping.values()))
+        if unmatched:
+            warnings.append(f"有 {unmatched} 列未自动匹配，将不会导入。请检查字段映射；可选字段可先在平台管理中启用，再重新导入。")
     # No positional guessing: a missing password column must never map another value.
     return {"fields": fields, "columns": [{"index": i, "label": f"第 {i+1} 列" + (f" · {headers[i][:100]}" if i < len(headers) else "")} for i in range(count)], "mapping": mapping, "warnings": warnings}
 
@@ -134,7 +142,8 @@ def import_preview(vault, payload):
                         if mode == "replace" or not candidate["secrets"].get(key): candidate["secrets"][key] = value
                     elif key == "tags":
                         candidate["tags"] = tags(candidate.get("tags", []) + [s.strip() for s in value.replace("，", ",").split(",") if s.strip()])
-                    elif mode == "replace" or not candidate.get(key): candidate[key] = convert(key, value)
+                    elif mode == "replace" or not candidate.get(key) or (key == "verification" and candidate[key] == "none"):
+                        candidate[key] = convert(key, value)
                 if "group" not in mapping and default_group and (mode == "replace" or not candidate.get("group")): candidate["group"] = default_group
                 candidate["tags"] = tags(candidate.get("tags", []) + batch_tags)
                 a = account(candidate, data["platforms"], existing)

@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory, send_file, redirect
+from flask import Flask, jsonify, request, send_from_directory, send_file, redirect, g
 from werkzeug.exceptions import HTTPException
 
 from .vault import Vault, Problem, account, audit, derive, dumps, now, password_check, platform, platform_config, FIELD_LABELS, TEXT_FIELDS, seal, summary, unseal
@@ -20,7 +20,7 @@ from .passkeys import Passkeys
 from .vault import custom_fields
 
 
-def create_app(directory=None, testing=False, port=8765):
+def create_app(directory=None, testing=False, port=8765, deployment=None):
     root = Path(__file__).resolve().parents[1]
     app = Flask(__name__, static_folder=None)
     app.config.update(TESTING=testing, MAX_CONTENT_LENGTH=16 * 1024 * 1024)
@@ -29,8 +29,20 @@ def create_app(directory=None, testing=False, port=8765):
     gates = Gates(vault)
     app.extensions["gates"] = gates
     passkeys = Passkeys(gates, port)
-    cookie_name = "atlas_session"
-    challenge_cookie = "atlas_challenge"
+    cookie_name = "__Host-atlas_session" if deployment else "atlas_session"
+    challenge_cookie = "__Secure-atlas_challenge" if deployment else "atlas_challenge"
+    session_source = {"ip": None}
+
+    def client_ip():
+        return g.atlas_client_ip
+
+    def active_session(*, touch=True):
+        vault.active(request.cookies.get(cookie_name), touch=touch)
+        if deployment and session_source["ip"] != client_ip():
+            raise Problem("连接来源已变化，请重新解锁。", 401)
+
+    def enrollment_required():
+        return bool(deployment and vault.data and not vault.data.get("security", {}).get("enabled"))
 
     def body():
         value = request.get_json()
@@ -39,17 +51,23 @@ def create_app(directory=None, testing=False, port=8765):
 
     @app.before_request
     def protect():
+        g.atlas_client_ip = deployment.client_ip(request) if deployment else request.remote_addr
         with vault.mutex:
-            gates.check_ip(request.remote_addr)
-        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-        if testing: hosts.add("localhost")
-        if request.host not in hosts: raise Problem("仅允许通过本机地址访问。", 403)
+            gates.check_ip(client_ip())
+        hosts = {deployment.host} if deployment else {f"127.0.0.1:{port}", f"localhost:{port}"}
+        if testing and not deployment: hosts.add("localhost")
+        if request.host not in hosts: raise Problem("访问地址与服务配置不匹配。", 403)
         if request.path.startswith("/api/"):
             origin = request.headers.get("Origin")
-            if origin and origin != f"http://{request.host}": raise Problem("不允许跨站请求。", 403)
+            expected_origin = deployment.origin if deployment else f"http://{request.host}"
+            if origin and origin != expected_origin: raise Problem("不允许跨站请求。", 403)
+            if deployment and request.method not in ("GET", "HEAD") and origin != expected_origin:
+                raise Problem("缺少有效的请求来源。", 403)
             if request.headers.get("Sec-Fetch-Site") == "cross-site": raise Problem("不允许跨站请求。", 403)
             if request.method not in ("GET", "HEAD") and request.headers.get("X-Atlas-Request") != "1":
                 raise Problem("请求校验失败，请刷新页面。", 403)
+            if deployment and (request.path.startswith("/api/security/passkey/") or request.path.startswith("/api/unlock/passkey/")):
+                raise Problem("IP 地址入口使用验证器或恢复码；通行密钥需域名入口。", 400)
 
     @app.after_request
     def headers(response):
@@ -78,29 +96,38 @@ def create_app(directory=None, testing=False, port=8765):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             with vault.mutex:
-                gates.check_ip(request.remote_addr)
-                vault.active(request.cookies.get(cookie_name), touch=touch)
+                gates.check_ip(client_ip())
+                active_session(touch=touch)
+                if enrollment_required() and (request.method, request.path) not in {
+                    ("GET", "/api/security"), ("POST", "/api/security/setup"),
+                    ("POST", "/api/security/setup/cancel"), ("POST", "/api/security/enable"), ("POST", "/api/lock")
+                }:
+                    raise Problem("公网访问必须先绑定并验证 2FA，资料访问尚未开放。", 423)
                 return fn(*args, **kwargs)
         return wrapper
 
     def session_response(token, **extra):
+        if deployment: session_source["ip"] = client_ip()
         response = jsonify(ok=True, **extra)
-        response.set_cookie(cookie_name, token, httponly=True, samesite="Strict", secure=False, path="/")
-        response.delete_cookie(challenge_cookie, path="/api/unlock")
+        response.set_cookie(cookie_name, token, httponly=True, samesite="Strict", secure=bool(deployment), path="/")
+        response.delete_cookie(challenge_cookie, path="/api/unlock", secure=bool(deployment))
         return response
 
     @app.get("/api/status")
     def status():
         with vault.mutex:
             unlocked = True
-            try: vault.active(request.cookies.get(cookie_name), touch=False)
+            try: active_session(touch=False)
             except Problem: unlocked = False
-            return jsonify(app="account-atlas", initialized=vault.envelope() is not None, unlocked=unlocked, idleSeconds=vault.idle_seconds)
+            return jsonify(app="account-atlas", initialized=vault.envelope() is not None, unlocked=unlocked, idleSeconds=vault.idle_seconds,
+                           enrollmentRequired=bool(unlocked and enrollment_required()), publicHttps=bool(deployment))
 
     @app.post("/api/setup")
     def setup():
         with vault.mutex:
             b = body()
+            if deployment and vault.envelope() is None:
+                deployment.authorize_setup(b.get("bootstrapToken"))
             vault.throttle()
             try:
                 token = vault.setup(b.get("password"), b.get("backup"), b.get("backupPassword", ""))
@@ -111,18 +138,18 @@ def create_app(directory=None, testing=False, port=8765):
     @app.post("/api/unlock")
     def unlock():
         with vault.mutex:
-            token, challenge = gates.begin(body().get("password", ""), gates.check_ip(request.remote_addr))
+            token, challenge = gates.begin(body().get("password", ""), gates.check_ip(client_ip()))
             if token: return session_response(token)
             config = vault.pending_auth["data"]["security"]
-            response = jsonify(mfaRequired=True, expiresIn=300, passkeyAvailable=bool(config.get("passkeys")), totpAvailable=config["enabled"])
-            response.delete_cookie(cookie_name, path="/")
-            response.set_cookie(challenge_cookie, challenge, httponly=True, samesite="Strict", secure=False, path="/api/unlock", max_age=300)
+            response = jsonify(mfaRequired=True, expiresIn=300, passkeyAvailable=bool(config.get("passkeys")) and not deployment, totpAvailable=config["enabled"])
+            response.delete_cookie(cookie_name, path="/", secure=bool(deployment))
+            response.set_cookie(challenge_cookie, challenge, httponly=True, samesite="Strict", secure=bool(deployment), path="/api/unlock", max_age=300)
             return response
 
     @app.post("/api/unlock/verify")
     def verify_unlock():
         with vault.mutex:
-            return session_response(gates.finish(request.cookies.get(challenge_cookie), body().get("code", ""), gates.check_ip(request.remote_addr)))
+            return session_response(gates.finish(request.cookies.get(challenge_cookie), body().get("code", ""), gates.check_ip(client_ip())))
 
     @app.post("/api/unlock/cancel")
     def cancel_unlock():
@@ -132,12 +159,17 @@ def create_app(directory=None, testing=False, port=8765):
             token = request.cookies.get(challenge_cookie, "")
             if pending and token.isascii() and secrets.compare_digest(token, pending["token"]): vault.pending_auth = None
             response = jsonify(ok=True)
-            response.delete_cookie(challenge_cookie, path="/api/unlock")
+            response.delete_cookie(challenge_cookie, path="/api/unlock", secure=bool(deployment))
             return response
 
     @app.get("/api/security")
     @locked
-    def security_status(): return jsonify(gates.status(gates.check_ip(request.remote_addr)))
+    def security_status():
+        result = gates.status(gates.check_ip(client_ip()))
+        result.update(totpRequired=bool(deployment), passkeysAvailable=not deployment)
+        if deployment:
+            result['networkGate'] = {'mode': 'city', 'allowed': list(deployment.city_gate.allowed), 'databaseRevision': deployment.city_gate.revision}
+        return jsonify(result)
 
     @app.post("/api/security/setup")
     @locked
@@ -158,13 +190,13 @@ def create_app(directory=None, testing=False, port=8765):
     @locked
     def passkey_register_options():
         passkeys.check_host(request.host)
-        return jsonify(passkeys.start_register(body(), gates.check_ip(request.remote_addr)))
+        return jsonify(passkeys.start_register(body(), gates.check_ip(client_ip())))
 
     @app.post("/api/security/passkey/register")
     @locked
     def passkey_register():
         passkeys.check_host(request.host)
-        token, codes = passkeys.register(body(), gates.check_ip(request.remote_addr))
+        token, codes = passkeys.register(body(), gates.check_ip(client_ip()))
         return session_response(token, **({"recoveryCodes":codes} if codes else {}))
 
     @app.post("/api/security/passkey/manage")
@@ -175,25 +207,25 @@ def create_app(directory=None, testing=False, port=8765):
     @locked
     def passkey_proof_options():
         passkeys.check_host(request.host)
-        return jsonify(passkeys.start_assertion(gates.check_ip(request.remote_addr)))
+        return jsonify(passkeys.start_assertion(gates.check_ip(client_ip())))
 
     @app.post("/api/security/passkey/proof")
     @locked
     def passkey_proof():
         passkeys.check_host(request.host)
-        return jsonify(proof=passkeys.assertion(body().get("credential"), gates.check_ip(request.remote_addr)))
+        return jsonify(proof=passkeys.assertion(body().get("credential"), gates.check_ip(client_ip())))
 
     @app.post("/api/unlock/passkey/options")
     def passkey_login_options():
         with vault.mutex:
             passkeys.check_host(request.host)
-            return jsonify(passkeys.start_assertion(gates.check_ip(request.remote_addr), request.cookies.get(challenge_cookie, "")))
+            return jsonify(passkeys.start_assertion(gates.check_ip(client_ip()), request.cookies.get(challenge_cookie, "")))
 
     @app.post("/api/unlock/passkey/verify")
     def passkey_login_verify():
         with vault.mutex:
             passkeys.check_host(request.host)
-            return session_response(passkeys.assertion(body().get("credential"), gates.check_ip(request.remote_addr), request.cookies.get(challenge_cookie, "")))
+            return session_response(passkeys.assertion(body().get("credential"), gates.check_ip(client_ip()), request.cookies.get(challenge_cookie, "")))
 
     @app.post("/api/security/enable")
     @locked
@@ -205,7 +237,9 @@ def create_app(directory=None, testing=False, port=8765):
     @app.post("/api/security/<action>")
     @locked
     def security_update(action):
-        token, codes = gates.update(action, body(), gates.check_ip(request.remote_addr))
+        if deployment and action == "disable":
+            raise Problem("公网模式必须保留 2FA，不能关闭验证器。", 409)
+        token, codes = gates.update(action, body(), gates.check_ip(client_ip()))
         return session_response(token, **({"recoveryCodes": codes} if codes else {}))
 
     @app.post("/api/lock")
@@ -213,7 +247,7 @@ def create_app(directory=None, testing=False, port=8765):
     def lock():
         vault.clear()
         response = jsonify(ok=True)
-        response.delete_cookie(cookie_name, path="/")
+        response.delete_cookie(cookie_name, path="/", secure=bool(deployment))
         return response
 
     @app.get("/api/state")
@@ -370,7 +404,7 @@ def create_app(directory=None, testing=False, port=8765):
 
     @app.get("/")
     def index():
-        if request.host == f"127.0.0.1:{port}": return redirect(f"http://localhost:{port}/", code=302)
+        if not deployment and request.host == f"127.0.0.1:{port}": return redirect(f"http://localhost:{port}/", code=302)
         return send_from_directory(root / "frontend" / "dist", "index.html")
 
     @app.get("/assets/<path:name>")
