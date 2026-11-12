@@ -277,12 +277,20 @@ def empty_vault():
         {"id": "apple", "name": "Apple", "template": "apple", "url": "https://account.apple.com/"}], "accounts": []}
 
 
+def idle_minutes(value):
+    if type(value) is not int or not 1 <= value <= 1440:
+        raise Problem("自动锁定时间请输入 1～1440 的整数分钟。")
+    return value
+
+
 def validate_vault(data):
     if not isinstance(data, dict) or data.get("schema") != 1 or type(data.get("revision")) is not int or data["revision"] < 0:
         raise Problem("资料版本不受支持。")
     if "security" in data:
         from .security import validate_security
         validate_security(data["security"])
+    if "idleMinutes" in data:
+        idle_minutes(data["idleMinutes"])
     ps, entries = data.get("platforms"), data.get("accounts")
     if not isinstance(ps, list) or not 1 <= len(ps) <= 200 or not isinstance(entries, list) or len(entries) > MAX_ACCOUNTS:
         raise Problem("备份资料数量或结构不正确。")
@@ -331,6 +339,7 @@ class Vault:
         self.path = self.directory / "vault.db"
         self.mutex = threading.RLock()
         self.idle_seconds = idle_seconds
+        self.default_idle_seconds = idle_seconds
         self.clear()
         self.failures, self.next_attempt = 0, 0
         with self.connect() as conn:
@@ -373,6 +382,7 @@ class Vault:
     def session(self, data, key, salt):
         self.clear()
         self.data, self.key, self.salt = data, key, salt
+        self.idle_seconds = idle_minutes(data["idleMinutes"]) * 60 if "idleMinutes" in data else self.default_idle_seconds
         self.token = secrets.token_urlsafe(32)
         self.last_used = time.monotonic()
         self.failures = self.next_attempt = 0
@@ -385,6 +395,7 @@ class Vault:
         data = unseal(backup, backup_password)[0] if backup else empty_vault()
         # Access gates belong to this installation, not a portable account backup.
         data.pop("security", None)
+        data.pop("idleMinutes", None)
         salt = os.urandom(16)
         key = derive(password, salt)
         env = seal(data, key, salt)
@@ -407,6 +418,7 @@ class Vault:
         return self.session(data, key, salt)
 
     def commit(self, data):
+        configured_idle = idle_minutes(data["idleMinutes"]) * 60 if "idleMinutes" in data else self.default_idle_seconds
         if len(data["accounts"]) > MAX_ACCOUNTS:
             raise Problem("本地版最多保存 10000 条账号。")
         data["revision"] = self.data["revision"] + 1
@@ -414,6 +426,7 @@ class Vault:
         with self.connect() as conn:
             conn.execute("UPDATE vault SET envelope=? WHERE id=1", (dumps(env),))
         self.data = data
+        self.idle_seconds = configured_idle
 
     def find(self, id):
         for a in self.data["accounts"]:
@@ -501,5 +514,7 @@ class Vault:
         if kind == "restore":
             candidate.pop("security", None)
             if "security" in self.data: candidate["security"] = copy.deepcopy(self.data["security"])
+            candidate.pop("idleMinutes", None)
+            if "idleMinutes" in self.data: candidate["idleMinutes"] = self.data["idleMinutes"]
         self.commit(candidate)
         self.plans.pop(token, None)

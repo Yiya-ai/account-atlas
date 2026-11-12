@@ -10,6 +10,8 @@ import SecurityDialog from './SecurityDialog';
 import {passkeyCeremony} from './passkeys';
 import {serverTunnel, publicHttps, serverStored} from './deployment';
 import {APPLE_SECTIONS, applicable, fieldLabel, fieldEnabled, verificationOptions, mergePlatformFields} from './accountFields';
+import DateInput from './DateInput.jsx';
+import {normalizeDateInput} from './calendarDate.js';
 
 const STATES = {active: '使用中', reserve: '备用', attention: '待处理', disabled: '停用'};
 const SECRET_LABELS = {password: '登录密码', totp: '身份验证器（TOTP 密钥）', recoveryCodes: '恢复码 / 备用码', appPassword: '应用专用密码', recoveryKey: '恢复密钥', legacyAccessKey:'遗产联系人访问密钥'};
@@ -71,7 +73,7 @@ function Gate({initialized, onUnlock}) {
     {restore && <><FilePicker label="加密备份文件" accept=".atlas,.json" required onChange={e => setFile(e.target.files[0])}/><Field label="备份密码"><input type="password" required value={backupPassword} onChange={e => setBackupPassword(e.target.value)}/></Field></>}
     {challenge ? <><p className="notice">主密码已验证。请在 5 分钟内完成二次验证，也可使用一个未用过的恢复码。</p>{passkeyAvailable && <Button type="button" className="full" disabled={busy} icon={KeyRound} onClick={usePasskey}>使用通行密钥解锁</Button>}<Field label="验证码或恢复码"><input autoFocus required autoComplete="one-time-code" maxLength={80} value={code} onChange={e => setCode(e.target.value)}/></Field><button type="button" className="text-button" disabled={busy} onClick={async () => {try {await api('/unlock/cancel','POST',{});} catch {} setChallenge(false); setCode(''); setError('');}}>返回主密码验证</button></> : <Field label={initialized ? '主密码' : '设置主密码'} hint={!initialized ? '至少 12 个字符，建议使用较长的词组。' : undefined}><input autoFocus type="password" autoComplete={initialized ? 'current-password' : 'new-password'} required minLength={initialized ? 1 : 12} maxLength={1024} value={password} onChange={e => setPassword(e.target.value)}/></Field>}
     {!initialized && <><Field label="再次输入主密码"><input type="password" autoComplete="new-password" minLength={12} required value={repeat} onChange={e => setRepeat(e.target.value)}/></Field><p className="notice">主密码没有找回入口。忘记后，只能使用仍记得密码的加密备份恢复。</p></>}
-    <ErrorLine error={error}/><Button primary disabled={busy} icon={LockKeyhole} className="full">{busy ? '正在处理…' : challenge ? '验证并解锁' : initialized ? '解锁资料库' : '创建并进入'}</Button><p className="gate-note">{publicHttps ? '通过 HTTPS 连接，资料加密保存在服务器。需通过地域门禁和 2FA。' : serverTunnel ? '通过 SSH 加密隧道连接，资料保存在你的服务器。' : '资料不会上传。'}闲置 15 分钟后自动锁定。</p>
+    <ErrorLine error={error}/><Button primary disabled={busy} icon={LockKeyhole} className="full">{busy ? '正在处理…' : challenge ? '验证并解锁' : initialized ? '解锁资料库' : '创建并进入'}</Button><p className="gate-note">{publicHttps ? '通过 HTTPS 连接，资料加密保存在服务器。需通过地域门禁和 2FA。' : serverTunnel ? '通过 SSH 加密隧道连接，资料保存在你的服务器。' : '资料不会上传。'}闲置后自动锁定，可在安全设置中调整时间。</p>
   </form></section></main>;
 }
 
@@ -104,8 +106,14 @@ function AccountEditor({initial, state, defaultPlatform, onClose, onSaved}) {
     setForm(f => ({...f, platformId:id, customFields:mergePlatformFields(f.customFields, state.platforms.find(p => p.id === id)?.fieldTemplates)}));
   }
   async function save(e) {
-    e.preventDefault(); setBusy(true); setError('');
-    try {await api(initial ? `/accounts/${initial.id}` : '/accounts', initial ? 'PUT' : 'POST', {...form, tags: parseTags(tagText), revision: revision.current}); onSaved('账号资料已保存');}
+    e.preventDefault(); setError('');
+    const dates = {};
+    for (const key of ['birthday', 'passwordUpdatedAt']) {
+      dates[key] = normalizeDateInput(form[key] || '');
+      if (dates[key] === null) return setError(`${labelFor(key, key === 'birthday' ? '生日' : '密码上次更新日期')}请输入有效的完整日期。`);
+    }
+    setBusy(true);
+    try {await api(initial ? `/accounts/${initial.id}` : '/accounts', initial ? 'PUT' : 'POST', {...form, ...dates, tags: parseTags(tagText), revision: revision.current}); onSaved('账号资料已保存');}
     catch (e) {setError(e.message);} finally {setBusy(false);}
   }
   function input(key, label, type = 'text', required = false, hint) {
@@ -113,6 +121,7 @@ function AccountEditor({initial, state, defaultPlatform, onClose, onSaved}) {
     label = key === 'identifier' ? label : labelFor(key, label);
     if (!applicable(currentPlatform, key)) hint = '保留的历史补充资料，可编辑或清空；新账号不默认显示。';
     if (type === 'textarea') return <Field label={label} hint={hint} wide><textarea rows={2} value={form[key] || ''} onChange={e => patch(key,e.target.value)}/></Field>;
+    if (type === 'date') return <Field label={label} hint={hint}><DateInput label={label} required={required} value={form[key] || ''} onChange={value => patch(key, value)}/></Field>;
     return <Field label={label} hint={hint}><input type={type} required={required} value={form[key] || ''} onChange={e => patch(key, e.target.value)}/></Field>;
   }
   return <Dialog title={initial ? '编辑账号' : '添加账号'} subtitle="资料按平台分别保存，相同邮箱也能拥有独立记录。" onClose={onClose} drawer>
@@ -238,7 +247,7 @@ function BackupDialog({onClose, onSaved, notify, onSecurity}) {
       else {await api('/restore/apply', 'POST', {token: preview.token, confirm}); onSaved('备份已恢复，当前主密码保持不变');}
     } catch(e) {setError(e.message);} finally {setBusy(false);}
   }
-  return <Dialog title="备份与安全" subtitle="定期备份，让资料在换电脑后也能继续使用。" onClose={onClose}><div className="security-entry"><Button icon={ShieldCheck} onClick={onSecurity}>2FA / 通行密钥 / IP 门禁</Button></div><div className="tab-row">{[['backup', '导出备份'], ['restore', '恢复备份'], ['password', '修改主密码']].map(([k, label]) => <button key={k} className={tab === k ? 'active' : ''} onClick={() => {setTab(k); setError(''); setPassword(''); setRepeat(''); setCurrent(''); setPreview(null); setConfirm('');}}>{label}</button>)}</div>
+  return <Dialog title="备份与安全" subtitle="定期备份，让资料在换电脑后也能继续使用。" onClose={onClose}><div className="security-entry"><Button icon={ShieldCheck} onClick={onSecurity}>自动锁定 / 2FA / IP 门禁</Button></div><div className="tab-row">{[['backup', '导出备份'], ['restore', '恢复备份'], ['password', '修改主密码']].map(([k, label]) => <button key={k} className={tab === k ? 'active' : ''} onClick={() => {setTab(k); setError(''); setPassword(''); setRepeat(''); setCurrent(''); setPreview(null); setConfirm('');}}>{label}</button>)}</div>
   <form onSubmit={submit}><div className="form-body"><ErrorLine error={error}/>{tab === 'restore' && preview ? <><p className="notice">备份包含 {preview.accounts} 个账号、{preview.platforms} 个平台，将替换当前的 {preview.current} 个账号。当前主密码不变。恢复前会在本机 data 文件夹保留一份使用当前主密码加密的快照。</p><Field label="输入“替换资料库”确认"><input required pattern="替换资料库" value={confirm} onChange={e => setConfirm(e.target.value)}/></Field></> : <>
     {tab === 'restore' && <FilePicker label="选择 .atlas 备份文件" accept=".atlas,.json" required onChange={e => setFile(e.target.files[0])}/>}{tab === 'password' && <Field label="当前主密码"><input type="password" autoComplete="current-password" required value={current} onChange={e => setCurrent(e.target.value)}/></Field>}
     <Field label={tab === 'backup' ? '设置备份密码' : tab === 'restore' ? '备份密码' : '新主密码'}><input type="password" required minLength={tab === 'restore' ? 1 : 12} maxLength={1024} autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)}/></Field>
@@ -251,9 +260,17 @@ function App() {
   const [selected, setSelected] = useState([]), [page, setPage] = useState(1), [dialog, setDialog] = useState(null), [toast, setToast] = useState(''), [error, setError] = useState(''), [loading, setLoading] = useState(false);
   const [loadedSearch, setLoadedSearch] = useState('');
   const epoch = useRef(0), toastTimer = useRef(null), lockChannel = useRef(null);
+  const idleSeconds = useRef(900);
+  idleSeconds.current = auth?.idleSeconds || 900;
   const notify = useCallback(message => {clearTimeout(toastTimer.current); setToast(message); toastTimer.current = setTimeout(() => setToast(''), 4500);}, []);
   const clear = useCallback(() => {invalidateRequests(); epoch.current++; clearTimeout(toastTimer.current); setState({accounts: [], platforms: [], tags: [], groups: [], revision: 0}); setDialog(null); setSelected([]); setQuery(''); setSearch(''); setView('all'); setPlatform(''); setGroup(''); setTag(''); setStatus(''); setLoadedSearch(''); setLoading(false); setError(''); setToast(''); setAuth(a => a ? {...a, unlocked: false} : a);}, []);
   const load = useCallback(async () => {const e = ++epoch.current; setLoading(true); try {const data = await api(`/state?q=${encodeURIComponent(search)}`); if (epoch.current === e) {setState(data); setLoadedSearch(search); setError(''); setSelected([]);}} catch(err) {if (epoch.current === e) setError(err.message);} finally {if (epoch.current === e) setLoading(false);}}, [search]);
+  const securityChanged = useCallback(async () => {
+    const next = await api('/status');
+    if (!next.unlocked) {clear(); return;}
+    setAuth(next);
+    await load();
+  }, [clear, load]);
   useEffect(() => {api('/status').then(setAuth).catch(e => setError(e.message));}, []);
   useEffect(() => {window.addEventListener('vault-locked', clear); return () => window.removeEventListener('vault-locked', clear);}, [clear]);
   useEffect(() => {const timer = setTimeout(() => setSearch(query), 220); return () => clearTimeout(timer);}, [query]);
@@ -278,24 +295,42 @@ function App() {
     return () => window.removeEventListener('pagehide', hide);
   }, [auth?.unlocked, clear]);
   useEffect(() => {
-    if (!auth?.unlocked) return;
-    let deadline = Date.now() + auth.idleSeconds * 1000;
-    const activity = () => {deadline = Date.now() + auth.idleSeconds * 1000;};
-    window.addEventListener('pointerdown', activity); window.addEventListener('keydown', activity);
+    if (!auth?.unlocked || auth?.enrollmentRequired) return;
+    let lastActivity = Date.now(), lastPing = 0, pendingActivity = false;
     let checking = false, alive = true;
     const check = async () => {
       if (checking) return;
-      if (Date.now() >= deadline) return lock();
       checking = true;
-      try {const s = await api('/status'); if (alive && !s.unlocked) clear();}
+      try {
+        if (pendingActivity && document.visibilityState === 'visible' && Date.now() - lastActivity < idleSeconds.current * 1000) {
+          pendingActivity = false;
+          await api('/activity', 'POST', {});
+          lastPing = Date.now();
+        }
+        const s = await api('/status');
+        if (!alive) return;
+        if (!s.unlocked) {clear(); return;}
+        idleSeconds.current = s.idleSeconds;
+        setAuth(current => current?.unlocked && current.idleSeconds !== s.idleSeconds ? {...current, idleSeconds:s.idleSeconds} : current);
+        if (Date.now() - lastActivity >= s.idleSeconds * 1000) await lock();
+      }
       catch {if (alive) clear();}
       finally {checking = false;}
     };
-    const focus = () => {if (document.visibilityState === 'visible') check();};
+    const activity = event => {
+      if (!event.isTrusted || document.visibilityState !== 'visible') return;
+      if (Date.now() - lastActivity >= idleSeconds.current * 1000) {lock(); return;}
+      lastActivity = Date.now(); pendingActivity = true;
+      // Send real activity promptly near the expiry boundary; polling alone never renews it.
+      if (Date.now() - lastPing >= 10000) check();
+    };
+    window.addEventListener('pointerdown', activity); window.addEventListener('keydown', activity);
+    window.addEventListener('scroll', activity, true);
+    const focus = () => {if (document.visibilityState === 'visible') check(); else pendingActivity = false;};
     document.addEventListener('visibilitychange', focus);
     const timer = setInterval(check, 10000);
-    return () => {alive = false; clearInterval(timer); document.removeEventListener('visibilitychange', focus); window.removeEventListener('pointerdown', activity); window.removeEventListener('keydown', activity);};
-  }, [auth?.unlocked, auth?.idleSeconds, clear, lock]);
+    return () => {alive = false; clearInterval(timer); document.removeEventListener('visibilitychange', focus); window.removeEventListener('pointerdown', activity); window.removeEventListener('keydown', activity); window.removeEventListener('scroll', activity, true);};
+  }, [auth?.unlocked, auth?.enrollmentRequired, clear, lock]);
   async function saved(message) {setDialog(null); notify(message); await load();}
   function navigate(nextView, p = '', g = '') {setView(nextView); setPlatform(p); setGroup(g); setTag(''); setStatus('');}
   const filtered = useMemo(() => state.accounts.filter(a => (view === 'trash' ? Boolean(a.deletedAt) : !a.deletedAt && (view === 'archive' ? a.archived : !a.archived)) && (view !== 'favorites' || a.favorite) && (!platform || a.platformId === platform) && (!group || a.group === group) && (!tag || a.tags.includes(tag)) && (!status || a.status === status)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [state.accounts, view, platform, group, tag, status]);
@@ -327,7 +362,7 @@ function App() {
     {dialog?.type === 'import' && <ImportDialog ui={{Dialog, Field, FilePicker, ErrorLine, Button}} state={state} defaultPlatform={platform} onClose={() => setDialog(null)} onSaved={saved}/>}
     {dialog?.type === 'batch' && <BatchDialog ids={dialog.ids} initialAction={dialog.action} onClose={() => setDialog(null)} onSaved={saved}/>}
     {dialog?.type === 'backup' && <BackupDialog onClose={() => setDialog(null)} onSaved={saved} notify={notify} onSecurity={() => setDialog({type:"security"})}/>}
-    {dialog?.type === 'security' && <SecurityDialog ui={{Dialog, Field, Button, ErrorLine}} onClose={() => setDialog(null)} onChanged={load}/>}
+    {dialog?.type === 'security' && <SecurityDialog ui={{Dialog, Field, Button, ErrorLine}} onClose={() => setDialog(null)} onChanged={securityChanged}/>}
     {toast && <div role="status" className="toast"><Check size={18}/>{toast}</div>}
   </div>;
 }

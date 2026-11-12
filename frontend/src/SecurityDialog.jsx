@@ -10,9 +10,25 @@ export default function SecurityDialog({ui, onClose, onChanged, enrollment=false
   const [busy, setBusy] = useState(false), [password, setPassword] = useState(''), [code, setCode] = useState('');
   const [binding, setBinding] = useState(null), [codes, setCodes] = useState(null), [saved, setSaved] = useState(false);
   const [enabled, setEnabled] = useState(false), [rules, setRules] = useState('');
+  const [idleMinutes, setIdleMinutes] = useState('15');
   const [proof, setProof] = useState(''), [keyName, setKeyName] = useState(''), [names, setNames] = useState({});
   const alive = useRef(true);
-  useEffect(() => {let active=true; api('/security').then(s => {if(active) {setState(s); setEnabled(s.ip.enabled); setRules(s.ip.rules.join('\n'));}}).catch(e => {if(active) setError(e.message);}); return () => {active=false; alive.current=false;};}, []);
+  useEffect(() => {let active=true; api('/security').then(s => {if(active) {setState(s); setEnabled(s.ip.enabled); setRules(s.ip.rules.join('\n')); setIdleMinutes(String(s.idleMinutes));}}).catch(e => {if(active) setError(e.message);}); return () => {active=false; alive.current=false;};}, []);
+  async function saveIdle(e) {
+    e.preventDefault();
+    const minutes = Number(idleMinutes);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return setError('锁定时间请输入 1 至 1440 的整数分钟。');
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await api('/security/idle', 'POST', {minutes});
+      const s = await api('/security');
+      if (!alive.current) return;
+      setState(s); setIdleMinutes(String(s.idleMinutes));
+      await onChanged();
+      if (alive.current) setNotice(`已保存：闲置 ${s.idleMinutes} 分钟后自动锁定。`);
+    } catch(e) {if (alive.current) setError(e.message);}
+    finally {if (alive.current) setBusy(false);}
+  }
   async function cancelBinding() {
     if (!binding) return true;
     setBusy(true);
@@ -64,9 +80,10 @@ export default function SecurityDialog({ui, onClose, onChanged, enrollment=false
     finally {if(alive.current) {setBusy(false); if(register) onChanged();}}
   }
   const canChange = Boolean(password && (!state?.factorEnabled || code || proof));
-  return <Dialog title="2FA、通行密钥与 IP 门禁" subtitle="白名单通过后，仍需主密码和已启用的二次验证。" onClose={close} wide>
+  return <Dialog title="自动锁定与安全设置" subtitle="设置闲置锁定时间、二次验证和 IP 门禁。" onClose={close} wide>
     <div className="form-body security-body"><ErrorLine error={error}/>{notice && <p className="notice" role="status">{notice}</p>}
       {!state ? <p className="muted">正在读取门禁设置…</p> : <>
+        {!enrollment && !binding && !codes && <section><h3>自动锁定</h3><form onSubmit={saveIdle}><Field label="闲置锁定时间（分钟）" hint="1 至 1440 分钟，默认 15 分钟。点击、输入或滚动页面会重新计时；单纯打开页面不会续期。"><input type="number" inputMode="numeric" required min="1" max="1440" step="1" disabled={busy} value={idleMinutes} onChange={e => setIdleMinutes(e.target.value)}/></Field><Button primary disabled={busy}>保存锁定时间</Button></form><p className="muted">当前设置：{state.idleMinutes} 分钟。保存后立即生效，重启后仍保留；也可随时点击“锁定”。</p></section>}
         <div className="security-overview"><ShieldCheck size={25}/><div><strong>资料库二次验证：{state.factorEnabled ? '已启用' : '未启用'}</strong><p>验证器：{state.enabled ? '已启用' : '未启用'} · 通行密钥：{state.passkeys.length} 把</p><p>{state.networkGate && <span>地域门禁：{state.networkGate.allowed.join(' / ')}（已启用）<br/></span>}附加 IP 白名单：{state.ip.enabled ? '已启用' : '未启用'} · 当前连接 {state.ip.current}</p></div></div>
         {codes ? <section className="recovery-sheet"><h3>保存一次性恢复码</h3><p className="muted">手机丢失时，输入主密码后可使用任意一个未用过的恢复码。每个仅能使用一次，以下内容只显示这一次。重新生成会使旧恢复码全部失效。</p><pre>{codes.join('\n')}</pre><div className="security-actions"><Button icon={Copy} onClick={() => copy(codes.join('\n'))}>复制恢复码</Button><Button onClick={() => saveFile(`Account Atlas 一次性恢复码\n请保存在资料库之外，每个仅能使用一次。\n\n${codes.join('\n')}\n`, 'text/plain;charset=utf-8', '账号簿-2FA恢复码.txt')}>下载恢复码</Button></div><label className="check"><input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)}/>我已将恢复码保存在资料库之外</label><Button disabled={!saved} onClick={() => {setCodes(null); setError(''); if(enrollment) onClose();}}>完成</Button></section> : <>
           <section><h3>身份验证器（2FA）</h3>{state.totpRequired && <p className="notice">公网模式必须启用 2FA。IP 地址入口不提供通行密钥，请使用验证器或一次性恢复码。</p>}<p className="muted">保护进入账号簿的入口，与账号详情里保存的 2FA 密钥相互独立。支持 Google Authenticator 等 TOTP 验证器；验证码为 6 位，每 30 秒更新。</p>

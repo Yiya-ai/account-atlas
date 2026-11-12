@@ -74,7 +74,7 @@ cd account-atlas
 | 操作 | 入口 |
 | --- | --- |
 | 打开账号簿 | 双击 `start.cmd`，输入主密码及已启用的第二因子 |
-| 暂时离开 | 点击右上角“锁定”；服务端闲置 15 分钟也会锁定 |
+| 暂时离开 | 点击右上角“锁定”；闲置默认 15 分钟自动锁定，可在“备份与安全 → 自动锁定 / 2FA / IP 门禁”设为 1～1440 分钟 |
 | 停止后台服务 | 双击 `stop.cmd` |
 | 手动运行 | 在项目目录执行 `.venv\Scripts\python.exe run.py`，按 Ctrl+C 停止 |
 
@@ -212,7 +212,7 @@ cd ..
 .venv\Scripts\python.exe run.py --port 8766 --data-dir output\qa-vault
 ```
 
-开发和截图请使用独立资料库及虚构数据。最近一次完整回归为 **145 项通过**，不代表不存在未知问题。Apple 表单还可在 `frontend` 目录运行 `node scripts/check-apple-form.mjs` 验证。
+开发和截图请使用独立资料库及虚构数据。最近一次完整回归为 **156 项通过**，不代表不存在未知问题。在 `frontend` 目录运行 `node scripts/check-apple-form.mjs`、`node scripts/check-dates.mjs` 和 `node scripts/check-idle-timer.mjs`，可分别验证 Apple 表单、日期录入和闲置锁定计时。
 
 - [详细使用指南](docs/USER-GUIDE.md)：字段规则、导入格式、备份与门禁操作。
 - [贡献说明](CONTRIBUTING.md)：开发和提交约定。

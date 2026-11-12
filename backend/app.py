@@ -17,7 +17,7 @@ from .importing import import_preview, analyze, template, schema as import_schem
 from .exporting import preview as export_preview, build as export_build
 from .security import Gates
 from .passkeys import Passkeys
-from .vault import custom_fields
+from .vault import custom_fields, idle_minutes
 
 
 def create_app(directory=None, testing=False, port=8765, deployment=None):
@@ -166,10 +166,24 @@ def create_app(directory=None, testing=False, port=8765, deployment=None):
     @locked
     def security_status():
         result = gates.status(gates.check_ip(client_ip()))
-        result.update(totpRequired=bool(deployment), passkeysAvailable=not deployment)
+        result.update(totpRequired=bool(deployment), passkeysAvailable=not deployment, idleMinutes=vault.idle_seconds // 60)
         if deployment:
             result['networkGate'] = {'mode': 'city', 'allowed': list(deployment.city_gate.allowed), 'databaseRevision': deployment.city_gate.revision}
         return jsonify(result)
+
+    @app.post("/api/security/idle")
+    @locked
+    def security_idle():
+        minutes = idle_minutes(body().get("minutes"))
+        data = copy.deepcopy(vault.data)
+        data["idleMinutes"] = minutes
+        vault.commit(data)
+        return jsonify(ok=True, idleSeconds=vault.idle_seconds)
+
+    @app.post("/api/activity")
+    @locked
+    def activity():
+        return jsonify(ok=True)
 
     @app.post("/api/security/setup")
     @locked
