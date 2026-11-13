@@ -23,9 +23,12 @@ assert.equal(byKey(extractOcrFields([line('owner@example.invalid'),line('owner@e
 
 const inline = ['姓名：测试账户', '出生日期: 19940601', 'Country or region: United States', 'Language: English (United States)', '其他電子郵件地址：other@example.invalid', '受信任電話號碼：+1 (202) 555-0100', '登入電話號碼：+86 13800138000', '雙重認證：已啟用'].map((text,index)=>line(text,100,index*100,500));
 assert.deepEqual(byKey(extractOcrFields(inline,apple)), {fullName:'测试账户',birthday:'1994-06-01',country:'United States',language:'English (United States)',email:'other@example.invalid',phone:'+1 (202) 555-0100',loginPhones:'+86 13800138000',verification:'twofactor'});
-assert.equal(extractOcrFields([line('双重认证：已开启')],{...apple,template:'google'}).length,0);
+assert.equal(byKey(extractOcrFields([line('双重认证：已开启')],{...apple,template:'google'})).verification,'twofactor');
 assert.equal(extractOcrFields([line('双重认证')],apple).length,0);
 assert.equal(byKey(extractOcrFields([line('Two-factor authentication: Off')],apple)).verification,'disabled');
+assert.equal(extractOcrFields([line('双重认证：totp')],apple).length,0);
+assert.equal(extractOcrFields([line('Name'),line('Password Synthetic Secret',100,140)],apple).length,0);
+assert.equal(extractOcrFields([line('Name'),line('Password secret@example.invalid',100,125),line('Synthetic Secret',100,150)],apple).length,0);
 assert.equal(byKey(extractOcrFields([line('1 个受信任电话号码'),line('+1 202 555 0100',100,140)],apple)).phone,'+1 202 555 0100');
 assert.equal(byKey(extractOcrFields([line('2 trusted phone numbers'),line('+1 202 555 0100',100,140),line('+1 202 555 0199',100,180)],apple)).phone,'+1 202 555 0100\n+1 202 555 0199');
 
@@ -50,7 +53,8 @@ assert.equal(confirmed.customFields,form.customFields);
 assert.equal(JSON.stringify(form),before);
 assert.deepEqual(applyOcrFields(form,[]),form);
 assert.deepEqual(applyOcrFields(form,[{key:'birthday',value:'20000229',selected:false},{key:'phone',value:'+1 202 555 0100',confirmed:false}]),form);
-assert.deepEqual(applyOcrFields(form,[{key:'secrets',value:'overwrite'},{key:'password',value:'overwrite'},{key:'__proto__',value:'pollute'},{key:'birthday',value:'1900-02-29'},{key:'phone',value:'123***'},{key:'notes',value:'overwrite'},{key:'verification',value:'totp'}]),form);
+assert.deepEqual(applyOcrFields(form,[{key:'secrets',value:'overwrite'},{key:'password',value:'overwrite'},{key:'__proto__',value:'pollute'},{key:'birthday',value:'1900-02-29'},{key:'phone',value:'123***'},{key:'notes',value:'overwrite'}]),form);
+assert.equal(applyOcrFields(form,[{key:'verification',value:'totp'}]).verification,'totp');
 assert.deepEqual(extractOcrFields(null,apple),[]);
 assert.deepEqual(applyOcrFields(form,null),form);
 console.log('OCR field checks passed: card layout, labels, masked data, dates, ambiguity, platform scope and confirmed-only merge.');

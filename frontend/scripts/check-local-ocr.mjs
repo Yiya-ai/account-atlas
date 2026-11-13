@@ -160,6 +160,19 @@ assert.ok(successful.progress.includes('正在识别截图… 50%'));
 assertDisposed(successful,worker); assertLocalRequests(successful);
 assertLateProgressIgnored(successful,worker);
 
+// Automatic mode loads only the three bundled, hash-verified languages and can
+// be cancelled during initialization just like the single-language modes.
+const mixed = harness(), mixedJob = mixed.start('auto');
+await flush();
+const mixedWorker = mixed.workers[0];
+mixedWorker.reply(); await flush();
+assert.deepEqual(Array.from(mixedWorker.messages.at(-1).payload.langs, lang => lang.code), ['chi_tra','chi_sim','eng']);
+mixedWorker.reply(); await flush();
+assert.equal(mixedWorker.messages.at(-1).payload.langs, 'chi_tra+chi_sim+eng');
+mixedJob.cancel();
+await assert.rejects(mixedJob.promise, /识别已取消/);
+assertDisposed(mixed, mixedWorker); assertLocalRequests(mixed);
+
 // Cancelling recognition itself must reject, not release a late recognition result.
 const recognizing = harness(), recognizingJob = recognizing.start('english');
 await flush();

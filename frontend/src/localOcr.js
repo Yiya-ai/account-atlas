@@ -17,7 +17,9 @@ export async function prepareScreenshot(file) {
   image.src = data;
   try {await image.decode();} catch {throw new Error('图片无法解码，请选择有效截图。');}
   if (!image.width || !image.height || image.width * image.height > 16000000 || Math.max(image.width, image.height) > 8000) throw new Error('截图尺寸过大，请裁剪到 1600 万像素以内。');
-  const scale = Math.min(1, 3200 / Math.max(image.width, image.height));
+  // Small account-page text benefits from 2× rasterization; cap both memory and
+  // large screenshots at the same 3200px processing limit.
+  const scale = Math.min(2, 3200 / Math.max(image.width, image.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale);
   const context = canvas.getContext('2d');
@@ -39,7 +41,7 @@ export function recognizeScreenshot(image, language, onProgress) {
   const timer = setTimeout(() => cancel(), 120000);
   const work = async () => {
     const base = new URL('ocr/', window.location.href);
-    const codes = language === 'traditional' ? ['chi_tra','eng'] : language === 'english' ? ['eng'] : ['chi_sim','eng'];
+    const codes = language === 'auto' ? ['chi_tra','chi_sim','eng'] : language === 'traditional' ? ['chi_tra','eng'] : language === 'english' ? ['eng'] : ['chi_sim','eng'];
     onProgress('正在加载本地识别语言…');
     const langs = await Promise.all(codes.map(async code => {
       const response = await fetch(new URL(`models/${code}.traineddata`, base), {signal:controller.signal, credentials:'same-origin'});
