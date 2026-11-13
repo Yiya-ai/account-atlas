@@ -48,8 +48,8 @@ try {
   const {AccountEditor, PlatformManager} = await import(pathToFileURL(output).href);
   const html = renderToStaticMarkup(React.createElement(AccountEditor, {state, defaultPlatform:'apple'}));
   for (const label of ['Apple 账户（主要邮箱或电话号码）', '其他电子邮件地址', '受信任电话号码', '出生日期', '双重认证', '实体安全密钥', 'App 专用密码']) assert.ok(html.includes(label), label);
-  assert.ok(html.includes('可连续输入 8 位数字'));
-  assert.ok(!html.includes('type="date"'), 'Dates must not use segmented browser input');
+  assert.ok(html.includes('连续输入 6～8 位数字'));
+  assert.ok(html.includes('type="date"') && html.includes('max="9999-12-31"'), 'Keep a bounded native calendar picker');
   for (const label of ['Google 提示', '身份验证器', '恢复码 / 备用码', '关联已有账号', '工作地址', '付款方式备注', '（历史补充）']) assert.ok(!html.includes(label), label);
   const manager = renderToStaticMarkup(React.createElement(PlatformManager, {state, initialId:'apple'}));
   for (const label of ['付款方式备注', '配送地址', '家人共享', '隐藏邮件地址', 'iCloud 分析', '性别']) assert.ok(manager.includes(label), label);
