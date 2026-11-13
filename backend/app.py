@@ -73,7 +73,7 @@ def create_app(directory=None, testing=False, port=8765, deployment=None):
     def headers(response):
         response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+            "Content-Security-Policy": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
         return response
 
@@ -426,6 +426,11 @@ def create_app(directory=None, testing=False, port=8765, deployment=None):
 
     @app.get("/favicon.svg")
     def favicon(): return send_from_directory(root / "frontend" / "dist", "favicon.svg")
+
+    @app.get("/ocr/<path:name>")
+    def ocr_assets(name):
+        # Static, bundled model/runtime files only. There is no screenshot upload API.
+        return send_from_directory(root / "frontend" / "dist" / "ocr", name)
 
     # Expiry clears references even when no more requests arrive.
     if not testing:

@@ -12,6 +12,7 @@ import {serverTunnel, publicHttps, serverStored} from './deployment';
 import {APPLE_SECTIONS, applicable, fieldLabel, fieldEnabled, verificationOptions, mergePlatformFields} from './accountFields';
 import DateInput from './DateInput.jsx';
 import {normalizeDateInput} from './calendarDate.js';
+import ScreenshotImport from './ScreenshotImport';
 
 const STATES = {active: '使用中', reserve: '备用', attention: '待处理', disabled: '停用'};
 const SECRET_LABELS = {password: '登录密码', totp: '身份验证器（TOTP 密钥）', recoveryCodes: '恢复码 / 备用码', appPassword: '应用专用密码', recoveryKey: '恢复密钥', legacyAccessKey:'遗产联系人访问密钥'};
@@ -126,6 +127,7 @@ function AccountEditor({initial, state, defaultPlatform, onClose, onSaved}) {
   }
   return <Dialog title={initial ? '编辑账号' : '添加账号'} subtitle="资料按平台分别保存，相同邮箱也能拥有独立记录。" onClose={onClose} drawer>
     <form onSubmit={save} className="dialog-form"><div className="form-body"><ErrorLine error={error}/>{loading ? <p>正在读取资料…</p> : <>
+      <ScreenshotImport platform={currentPlatform} form={form} onApply={(next, keys) => {setForm(next); setRetainedFields(current => [...new Set([...current, ...keys])]);}}/>
       <div className="section-tools"><h3>基本资料</h3><button type="button" className="text-button" onClick={() => setAllFields(!allFields)}>{allFields ? '使用平台默认字段' : '显示此平台可选字段'}</button></div><p className="muted">{template === 'apple' ? '按 Apple 账户页面分区录入，除账号标识外均可留空。资料只作台账记录，不会修改 Apple 设置。' : '按平台模板显示；已有内容始终保留。可在“平台与字段管理”调整默认字段。'}</p><div className="form-grid"><Field label="所属平台"><select value={form.platformId} onChange={e => changePlatform(e.target.value)}>{state.platforms.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>{input('title', '显示名称', 'text', false, '例如：工作主账号、日区备用')}{input('identifier', template === 'apple' ? 'Apple 账户（主要邮箱或电话号码） *' : '账号标识 *', 'text', true, template === 'apple' ? '填写主要电子邮件地址或用于登录的电话号码' : '邮箱、手机号或用户名')}{template !== 'apple' && input('email', '联系邮箱', 'textarea', false, '多个邮箱可换行填写')}{template !== 'apple' && input('phone', '绑定手机号', 'textarea', false, '多个号码可换行填写')}{input('region', template === 'apple' ? '商店地区' : '地区')}
       <Field label="分组"><input list="groups" value={form.group} onChange={e => patch('group', e.target.value)}/><datalist id="groups">{state.groups.map(g => <option key={g} value={g}/>)}</datalist></Field><Field label="状态（手动记录）"><select value={form.status} onChange={e => patch('status', e.target.value)}>{Object.entries(STATES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
       <Field label="标签" hint="用逗号分隔，例如：工作, 主账号" wide><input value={tagText} onChange={e => setTagText(e.target.value)}/></Field></div>

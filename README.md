@@ -23,6 +23,7 @@
 | 批量整理 | 调整分组、标签和状态；收藏、归档、移入回收站、恢复或永久删除 |
 | 快捷查看 | 详情字段可复制；敏感内容需主动查看；保存 TOTP 密钥后可显示实时验证码 |
 | 批量导入 | 下载平台 CSV 模板，映射内置与自定义字段，预览新增、更新、跳过及无效行 |
+| 截图录入 | 浏览器本地 OCR 识别截图，逐项核对并勾选后填入账号表单；原图不上传 |
 | CSV / Excel 导出 | 按已选账号、当前筛选结果或平台导出；自由选择字段，敏感字段默认不选 |
 | 加密存储与备份 | 整库 AES-256-GCM 加密；独立密码的 `.atlas` 备份，支持恢复和迁移 |
 | 访问门禁 | 主密码解锁，可叠加 TOTP 或通行密钥验证；严格 IP 白名单和闲置锁定 |
@@ -92,6 +93,14 @@ cd account-atlas
 - 把字段标为“敏感”会保护已有同名字段；取消模板敏感标记不会自动降低已有记录的敏感级别。
 
 点击账号进入详情，可复制字段或主动查看敏感资料。详情中的“通行密钥备注”用于记录设备与保管位置，不保存私钥；保护账号簿入口的通行密钥在“备份与安全”中设置。
+
+### 截图识别填写
+
+在添加或编辑账号时，点击 **截图识别填写**，选择图片或在粘贴区域按 Ctrl+V，选择简体中文、繁体中文或英文后开始识别。支持 PNG / JPEG / WebP，最大 10 MB、1600 万像素。
+
+识别结果默认全部不勾选。核对并按需修改候选值，再勾选字段、点击 **确认填入所选字段**；已有内容会提示替换。最后仍需点击 **保存账号** 才会入库。密码、密钥、恢复码及打码内容不会作为候选字段填入。
+
+截图和 OCR 文本只在当前浏览器内处理，不上传自己的服务器或第三方，也不由应用写入磁盘。服务器仅提供同源识别程序和语言文件；中文加英文模型约 6 MB。取消、关闭窗口或锁定会终止识别并清除临时结果。字段范围、限制与离线安装说明见 [本地 OCR](docs/LOCAL-OCR.md)。
 
 ### 搜索与批量整理
 
@@ -212,9 +221,12 @@ cd ..
 .venv\Scripts\python.exe run.py --port 8766 --data-dir output\qa-vault
 ```
 
-开发和截图请使用独立资料库及虚构数据。最近一次完整回归为 **156 项通过**，不代表不存在未知问题。在 `frontend` 目录运行 `node scripts/check-apple-form.mjs`、`node scripts/check-dates.mjs` 和 `node scripts/check-idle-timer.mjs`，可分别验证 Apple 表单、日期录入和闲置锁定计时。
+开发和截图请使用独立资料库及虚构数据。最近一次完整回归为 **159 项通过**，不代表不存在未知问题。在 `frontend` 目录运行 `node scripts/check-apple-form.mjs`、`node scripts/check-dates.mjs`、`node scripts/check-idle-timer.mjs`、`node scripts/check-ocr-fields.mjs` 和 `node scripts/check-local-ocr.mjs`，可验证表单、日期、闲置锁定及截图识别规则和清理流程。
+
+截图字段匹配和识别生命周期可分别运行 `node scripts/check-ocr-fields.mjs`、`node scripts/check-local-ocr.mjs`。OCR 实际识别效果与网络边界还应使用虚构截图做浏览器验证。
 
 - [详细使用指南](docs/USER-GUIDE.md)：字段规则、导入格式、备份与门禁操作。
+- [本地 OCR](docs/LOCAL-OCR.md)：截图录入、隐私边界和离线资源维护。
 - [贡献说明](CONTRIBUTING.md)：开发和提交约定。
 - [发布隐私检查](PRIVACY-RELEASE-CHECK.md)：哪些内容应留在本机。
 - [截图说明](docs/images/README.md)：演示数据与截图来源。
